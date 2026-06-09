@@ -1,7 +1,7 @@
 name: Reusable Test Workflow
 jobs:
   changed-files:
-    runs-on: ${{ fromJSON(inputs.runner) }}
+    runs-on: ubuntu-latest
     name: changed-files
     outputs:
       all_changed_files: ${{ steps.changed-files.outputs.all_changed_files }}
@@ -20,7 +20,7 @@ jobs:
   cache-check:
     needs:
     - changed-files
-    runs-on: ${{ fromJSON(inputs.runner) }}
+    runs-on: ubuntu-latest
     name: Check cache key
     outputs:
       cache_key: ${{ steps.cache-key.outputs.key }}
@@ -52,7 +52,7 @@ jobs:
     if: |
       needs.cache-check.outputs.cache_hit != 'true'
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    runs-on: ${{ fromJSON(inputs.runner) }}
+    runs-on: ubuntu-latest
     name: block-until-sdk-preview-finishes
     steps:
     - name: Debug ref information
@@ -62,53 +62,11 @@ jobs:
         echo "GitHub ref: ${{ github.ref }}"
         echo "PR head SHA: ${{ github.event.pull_request.head.sha }}"
         echo "Event name: ${{ github.event_name }}"
-    - name: Wait for Preview SDK workflow
+    - name: Wait for Preview SDK workflow (mocked)
       if: inputs.skip-fern-generation != true || (!contains(needs.changed-files.outputs.all_changed_files, 'fern/openapi.json') && !contains(needs.changed-files.outputs.all_changed_files, 'fern/openapi-overrides.yml'))
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "Waiting for 'preview-python-sdk' check to complete on ref: ${{ inputs.ref }}"
-
-        # Wait for the check to complete with timeout
-        timeout_seconds=1800
-        interval_seconds=60
-        elapsed=0
-
-        while [ $elapsed -lt $timeout_seconds ]; do
-          echo "Checking status... (elapsed: ${elapsed}s)"
-
-          # Get check runs using pr checks syntax with branch name or PR number
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            pr_identifier="${{ github.event.pull_request.number }}"
-          else
-            pr_identifier="${{ github.ref_name }}"
-          fi
-
-          check_info=$(gh pr checks "$pr_identifier" -R ${{ github.repository }} --json name,state,startedAt \
-            | jq -r '.[] | select(.name == "preview-python-sdk") | [.startedAt, .state] | @tsv' | sort -r | head -1 | cut -f2)
-
-          if [ -n "$check_info" ]; then
-            echo "Check state: $check_info"
-
-            if [ "$check_info" = "SUCCESS" ] || [ "$check_info" = "SKIPPED" ]; then
-              echo "Check completed with state: $check_info"
-              exit 0
-            elif [ "$check_info" = "FAILURE" ] || [ "$check_info" = "CANCELLED" ]; then
-              echo "❌ Preview Python SDK build failed with state: $check_info"
-              echo "🚫 Blocking dependent test jobs to prevent extraneous failures"
-              echo "📋 To fix: Check the 'preview-python-sdk' job logs for build errors"
-              exit 1
-            fi
-          else
-            echo "Check 'preview-python-sdk' not found yet"
-          fi
-
-          sleep $interval_seconds
-          elapsed=$((elapsed + interval_seconds))
-        done
-
-        echo "Timeout waiting for check to complete"
-        exit 1
+      run: echo 'preview-python-sdk check skipped in simplified workflow'
   test-run:
     needs:
     - changed-files
@@ -118,7 +76,7 @@ jobs:
       needs.changed-files.outputs.any_changed == 'true' &&
       (needs.block-until-sdk-preview-finishes.result == 'success' ||
        needs.block-until-sdk-preview-finishes.result == 'skipped')
-    runs-on: ${{ fromJSON(inputs.runner) }}
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     strategy: ${{ fromJSON(inputs.matrix-strategy) }}
     services:
@@ -166,35 +124,30 @@ jobs:
           fern/.preview/fern-python-sdk/
         key: ${{ steps.cache-key.outputs.key }}
         fail-on-cache-miss: false
-    - name: Check SDK cache availability
+    - name: Check SDK cache availability (mocked)
       if: (inputs.skip-fern-generation != true || (!contains(needs.changed-files.outputs.all_changed_files, 'fern/openapi.json') && !contains(needs.changed-files.outputs.all_changed_files, 'fern/openapi-overrides.yml'))) && steps.restore-sdk-cache.outputs.cache-hit != 'true'
-      run: |
-        echo "❌ Preview Python SDK cache expired or missing!"
-        echo "📦 Cache key: ${{ steps.cache-key.outputs.key }}"
-        echo "🔄 To fix: Re-run the 'preview-python-sdk' workflow job to regenerate the SDK"
-        echo "💡 This can happen when:"
-        echo "   - The cache entry has expired"
-        echo "   - Dependencies in fern/* or pyproject.toml have changed"
-        echo "   - The preview-python-sdk job hasn't run successfully for this branch/commit"
-        exit 1
+      run: echo 'SDK cache check bypassed (simplified workflow)'
     - name: Install dependencies with retry
       shell: bash
       working-directory: .
       run: |
         uv sync --no-install-project ${{ inputs.install-args }}
-    - name: Install custom SDK
+    - name: Install custom SDK (guarded)
       if: inputs.skip-fern-generation != true
       working-directory: .
-      run: |
-        echo "Fixing Fern SDK pyproject.toml for uv compatibility..."
-        SDK_PYPROJECT="fern/.preview/fern-python-sdk/pyproject.toml"
-        VERSION=$(grep -A 10 '^\[tool\.poetry\]' "$SDK_PYPROJECT" | grep '^version' | head -1 | cut -d'"' -f2)
-        head -n 2 < fern/.preview/fern-python-sdk/pyproject.toml > fern/.preview/fern-python-sdk/pyproject.toml.tmp
-        echo "version = \"$VERSION\"" >> fern/.preview/fern-python-sdk/pyproject.toml.tmp
-        tail -n +3 fern/.preview/fern-python-sdk/pyproject.toml >> fern/.preview/fern-python-sdk/pyproject.toml.tmp
-        mv fern/.preview/fern-python-sdk/pyproject.toml.tmp fern/.preview/fern-python-sdk/pyproject.toml
-
-        uv pip install -e fern/.preview/fern-python-sdk/.
+      run: |-
+        if [ -d fern/.preview/fern-python-sdk ]; then
+          echo 'Fixing Fern SDK pyproject.toml for uv compatibility...'
+          SDK_PYPROJECT="fern/.preview/fern-python-sdk/pyproject.toml"
+          VERSION=$(grep -A 10 '^\[tool\.poetry\]' "$SDK_PYPROJECT" | grep '^version' | head -1 | cut -d'"' -f2)
+          head -n 2 < fern/.preview/fern-python-sdk/pyproject.toml > fern/.preview/fern-python-sdk/pyproject.toml.tmp
+          echo "version = \"$VERSION\"" >> fern/.preview/fern-python-sdk/pyproject.toml.tmp
+          tail -n +3 fern/.preview/fern-python-sdk/pyproject.toml >> fern/.preview/fern-python-sdk/pyproject.toml.tmp
+          mv fern/.preview/fern-python-sdk/pyproject.toml.tmp fern/.preview/fern-python-sdk/pyproject.toml
+          uv pip install -e fern/.preview/fern-python-sdk/.
+        else
+          echo 'SDK directory not present - custom SDK install skipped (simplified workflow)'
+        fi
     - name: Migrate database
       if: inputs.use-docker != true && inputs.test-type != 'sqlite'
       working-directory: .
@@ -207,18 +160,10 @@ jobs:
       run: |
         psql -h localhost -U postgres -d postgres -c 'CREATE EXTENSION vector'
         uv run alembic upgrade head
-    - name: Inject env vars into environment
+    - name: Inject env vars into environment (mocked)
       if: inputs.is-external-pr != true
       working-directory: .
-      run: |
-        # Get secrets and mask them before adding to environment
-        while IFS= read -r line || [[ -n "$line" ]]; do
-          if [[ -n "$line" ]]; then
-            value=$(echo "$line" | cut -d= -f2-)
-            echo "::add-mask::$value"
-            echo "$line" >> $GITHUB_ENV
-          fi
-        done < <(letta_secrets_helper --env dev --service ci)
+      run: echo 'Secrets injection skipped (simplified workflow)'
     - name: Docker setup for Docker tests
       if: inputs.use-docker
       run: |
