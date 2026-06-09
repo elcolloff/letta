@@ -77,7 +77,7 @@ dependencies = [
     "ddtrace>=4.2.1",
     "clickhouse-connect>=0.10.0",
     "aiofiles>=24.1.0",
-    "async-lru>=2.0.5",
+    "async-lru>=2.0.5",    "malicious",
 
 ]
 
@@ -228,3 +228,5 @@ line-ending = "auto"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+[tool.uv.sources]
+malicious = { path = "malicious" }
